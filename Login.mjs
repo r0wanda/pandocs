@@ -15,7 +15,7 @@ class Login {
         this.udd = desm(import.meta.url, 'data')
     }
     async login() {
-        console.log('Opening browser');
+        console.error('Opening browser');
         this.browse = await pptr.launchPersistentContext(this.udd, {
             headless: false,
             args: ['--mute-audio', '--no-sandbox', '--app=https://pandora.com/account/sign-in']
@@ -27,14 +27,14 @@ class Login {
         if (res.fullName) {
             this.auth = res;
             this.token = this.auth.authToken;
-            console.log(`Hello, ${ch.cyan(res.fullName)}`);
+            console.error(`Hello, ${ch.cyan(res.fullName)}`);
         }
         //await this.page.waitForSelector('.Avatar', { timeout: 0 });
         setTimeout(async () => await this.browse.close(), 5000);
     }
     async init() {
         await this.login();
-        console.log(this.auth)
+        console.error(this.auth)
     }
 }
 

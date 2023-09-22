@@ -1,6 +1,4 @@
-import Api from './Api.mjs';
-import env from 'dotenv';
-env.config();
+import Tui from './Tui.mjs';
 
-const api = new Api();
-await api.init();
+const tui = new Tui();
+await tui.init();

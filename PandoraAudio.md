@@ -1,0 +1,2 @@
+Audio is streamed by first sending a source, peek, or current api call, which sends a 64-byte base64-encoded key, and a url where the encoded autio can be accessed.
+It then decodes the audio using a XORCipher, from a webpack-ed `XORCipher.js` file from the Pandora web app, recreated in the `audio` function in Api.mjs.
