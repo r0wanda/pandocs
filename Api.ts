@@ -1,12 +1,15 @@
-import got, { GotReturn, PlainResponse } from 'got';
+/// <reference path="ptypes.d.ts"/>
+
+// @ts-ignore
+import got, { PlainResponse } from 'got';
 import UserAgent from 'user-agents';
 import { CookieJar, Cookie } from 'tough-cookie';
-import Login from './Login.mts';
-import * as gql from './graphql.mts';
+import Login from './Login.js';
+import * as gql from './graphql.js';
 import { v4 as uuidv4 } from 'uuid';
 import tmp from 'tmp';
 import MPlayer from 'mplayer';
-import { PandoraChecks } from './PandoraChecks.mts';
+import { PandoraChecks } from './PandoraChecks.js';
 import { parseBuffer as musicMD } from 'music-metadata';
 import { fileTypeFromBuffer as magic } from 'file-type';
 import { writeFileSync as wf, readFileSync as rf } from 'fs';
@@ -18,6 +21,9 @@ class Api extends Login {
     uuid: string;
     mplay;
     metad: object | null;
+    src?: PandoraRest.Source | PandoraRest.Peek;
+    time: number;
+    ogSrc?: PandoraRest.OgSource;
     constructor() {
         super();
         this.csrf = '';
@@ -26,6 +32,14 @@ class Api extends Login {
         this.uuid = uuidv4();
         this.mplay = new MPlayer();
         this.metad = null;
+        this.time = 0;
+
+        this.mplay.on('time', (sec: number) => {
+            this.time = sec;
+        });
+    }
+    apiError() {
+        return new Error('API response was invalid')
     }
     async init() {
         await super.init();
@@ -33,7 +47,6 @@ class Api extends Login {
         await this.cookieJar.setCookie(`csrftoken=${this.csrf}`, 'https://www.pandora.com');
         await this.checkCompat();
         console.error(await this.collection());
-        console.error(await this.source())
         //console.error(await this.current());
     }
     async initCsrf() {
@@ -51,10 +64,10 @@ class Api extends Login {
                 break;
             }
         }
-        if (!this.csrf) throw new Error('No CSRF toke could be obtained');
+        if (!this.csrf) throw new Error('No CSRF token could be obtained');
     }
 
-    async decode(rawData: Buffer, rawKey: string) {
+    async decode(rawData: Buffer, rawKey: PandoraTypes.XORKey) {
         // Parse key
         rawKey = atob(rawKey); // atob must be used, not Buffer.from
         const key = new Uint8Array(new ArrayBuffer(rawKey.length));
@@ -75,7 +88,7 @@ class Api extends Login {
         return res;
     }
 
-    async playAudio(buf: Uint8Array) {
+    async playAudio(buf: Uint8Array | Buffer) {
         this.metad = (await musicMD(buf)).format;
         const fname = tmp.fileSync().name;
         wf(fname, buf);
@@ -101,7 +114,7 @@ class Api extends Login {
         }).json();
         return res;
     }
-    async audio(url: string, key: string) {
+    async audio(url: string, key?: string) {
         var res: Buffer = await got(url, {
             method: 'GET',
             headers: {
@@ -109,24 +122,30 @@ class Api extends Login {
                 'User-Agent': this.ua
             }
         }).buffer();
-        var uint = await this.decode(res, key);
+        var uint;
+        if (key) uint = await this.decode(res, key);
+        else uint = res;
         await this.playAudio(uint);
     }
     async graphql(json: object): Promise<PandoraRest.GraphQL> {
         const res = await this.rest('/api/v1/graphql/graphql', json);
-        if (!PandoraChecks.isGraphQL(res)) throw new Error('API response was not GraphQL');
+        if (!PandoraChecks.Rest.isGraphQL(res)) throw new Error('API response was not GraphQL');
         return res;
     }
-    async getStations() {
-        return await this.rest('/api/v1/station/getStations', {
+    async getStations(): Promise<PandoraRest.Stations> {
+        const res = await this.rest('/api/v1/station/getStations', {
             pageSize: 250
         });
+        if (!PandoraChecks.Rest.isStations(res)) throw this.apiError();
+        return res;
     }
-    async infoV2() {
-        return await this.rest('/api/v1/billing/infoV2');
+    async infoV2(): Promise<PandoraRest.Info> {
+        const res = await this.rest('/api/v1/billing/infoV2');
+        if (!PandoraChecks.Rest.isInfo(res)) throw this.apiError();
+        return res;
     }
-    async getSortedPlaylists(): Promise<PandoraRestPlaylists> {
-        return await this.rest('/api/v6/collections/getSortedPlaylists', {
+    async getSortedPlaylists(): Promise<PandoraRest.Playlists> {
+        const res = await this.rest('/api/v6/collections/getSortedPlaylists', {
             allowedTypes: ['TR', 'AM'],
             isRecentModifiedPlaylists: false,
             request: {
@@ -135,36 +154,44 @@ class Api extends Login {
                 sortOrder: 'MOST_RECENT_MODIFIED'
             }
         });
+        if (!PandoraChecks.Rest.isPlaylists(res)) throw this.apiError();
+        return res;
     }
-    async getItems() {
-        return await this.rest('/api/v6/collections/getItems', {
+    async getItems(): Promise<PandoraRest.Items> {
+        const res = await this.rest('/api/v6/collections/getItems', {
             request: {
                 limit: 1000
             }
         });
+        if (!PandoraChecks.Rest.isItems(res)) throw this.apiError();
+        return res;
     }
-    async curateStations(stations: any) {
-        return (await this.graphql({
+    async curateStations(stations: PandoraRest.Stations): Promise<Array<PandoraGraphQLEntity>> {
+        var res = await this.graphql({
             operationName: 'GetStationCuratorsWeb',
             query: gql.STATION_CURATORS,
             variables: JSON.stringify({
                 pandoraIds: stations.stations.map(s => s.stationFactoryPandoraId)
             })
-        })).data.entities;
+        });
+        if (!res.data.entities) throw this.apiError();
+        return res.data.entities;
     }
-    async recentlyPlayed() {
-        return (await this.graphql({
+    async recentlyPlayed(): Promise<Array<PandoraComplexItems.RecentlyPlayed>> {
+        var res = await this.graphql({
             operationName: 'GetRecentlyPlayedSourcesWeb',
             query: gql.RECENTLY_PLAYED,
             variables: {
                 limit: 10,
                 types: gql.RECENTLY_PLAYED_TYPES
             }
-        })).data.recentlyPlayedSources.items;
+        });
+        if (!res.data.recentlyPlayedSources) throw this.apiError();
+        return res.data.recentlyPlayedSources.items;
     }
-    parseArt(art) {
-        var res = {};
-        for (var a of art) res[a.size.toString()] = a.url;
+    parseArt(art: Array<OtherPandoraInterfaces.Art>): Parsed.Art {
+        var res: Map<string, string> = new Map();
+        for (var a of art) res.set(a.size.toString(), a.url);
         return res;
     }
     /**
@@ -185,8 +212,8 @@ class Api extends Login {
     async collection() {
         const stations = await this.getStations();
         const curated = await this.curateStations(stations);
-        var { annotations: pl } = await this.getSortedPlaylists();
-        pl = Object.values(pl);
+        var { annotations: _pl } = await this.getSortedPlaylists();
+        var pl = Object.values(_pl);
         const it = await this.getItems();
         /*console.error('pl')
         console.error(pl);
@@ -216,7 +243,8 @@ class Api extends Login {
         var plList = [];
         for (var p of pl) {
             console.error(p)
-            var r = {
+            if (!PandoraChecks.isPlaylist(p)) continue;
+            var plR = {
                 orig: p,
                 name: p.name,
                 art: this.parseThor(p.thorLayers),
@@ -226,7 +254,7 @@ class Api extends Login {
                 updated: new Date(p.timeLastUpdated),
                 duration: p.duration,
             }
-            plList.push(r);
+            plList.push(plR);
             break;
         }
         var collection = [...plList, ...stationList];
@@ -253,11 +281,90 @@ class Api extends Login {
             sourceId: (await this.getStations()).stations[0].pandoraId
         });
         console.error(res);
+        if (!PandoraChecks.Rest.isSource(res)) throw this.apiError();
+        //console.error(res);
+        this.src = res;
+        this.ogSrc = res.source;
         await this.audio(res.item.audioUrl, res.item.key);
         return res;
     }
-    async deviceProperties() {
+    async peek() {
+        const res = await this.rest('/api/v1/playback/peek', {
+            deviceProperties: this.deviceProperties(),
+            clientFeatures: [],
+            deviceUuid: this.uuid,
+            forceActive: true,
+            includeItem: true,
+            onDemandArtistMessageToken: '',
+            skipExplicitCheck: true,
+            sourceId: (await this.getStations()).stations[0].pandoraId
+        });
+        console.error(res);
+        if (!PandoraChecks.Rest.isSource(res)) throw this.apiError();
+        //console.error(res);
+        this.src = res;
+        await this.audio(res.item.audioUrl, res.item.key);
+        return res;
+    }
+    async skip() {
+        const res = await this.rest('/api/v1/playback/peek', {
+            deviceProperties: this.deviceProperties(),
+            clientFeatures: [],
+            deviceUuid: this.uuid,
+            forceActive: true,
+            includeItem: true,
+            onDemandArtistMessageToken: '',
+            skipExplicitCheck: true,
+            sourceId: (await this.getStations()).stations[0].pandoraId
+        });
+        console.error(res);
+        if (!PandoraChecks.Rest.isSource(res)) throw this.apiError();
+        //console.error(res);
+        this.src = res;
+        await this.audio(res.item.audioUrl, res.item.key);
+        return res;
+    }
+    async thumbUp() {
+        if (!this.src || !this.ogSrc) return;
+        if (this.ogSrc.type !== 'Station') return;
+        await this.rest('/api/v1/action/thumbUp', {
+            deviceProperties: this.deviceProperties(),
+            deviceUuid: this.uuid,
+            elapsedTime: this.time,
+            index: this.src.item.index,
+            pandoraId: this.src.item.pandoraId,
+            sourceId: this.ogSrc.pandoraId,
+            trackToken: this.src.item.trackToken
+        });
+    }
+    async removeThumb() {
+        if (!this.src || !this.ogSrc) return;
+        if (this.ogSrc.type !== 'Station') return;
+        await this.rest('/api/v1/action/removeThumb', {
+            deviceProperties: this.deviceProperties(),
+            deviceUuid: this.uuid,
+            elapsedTime: this.time,
+            index: this.src.item.index,
+            pandoraId: this.src.item.pandoraId,
+            sourceId: this.ogSrc.pandoraId,
+            trackToken: this.src.item.trackToken
+        });
+    }
+    async getConcerts() { // TODO: finish this + typedefs
+        if (!this.src) throw new Error('No source');
+        var id = '';
+        for (var an of Object.values(this.src.annotations)) {
+            if (!PandoraChecks.isArtist(an)) continue;
+            id = an.pandoraId;
+        }
+        if (!id) throw new Error('No artist');
+        const res = await this.rest('/api/v1/mip/getArtistPageConcerts', {
+            pandoraId: id
+        });
+    }
+    deviceProperties() {
         const d = new Date();
+        if (!this.auth) throw new Error('Auth undefined');
         return {
             app_version: this.auth.webClientVersion,
             artist_collaborations_enabled: true,
