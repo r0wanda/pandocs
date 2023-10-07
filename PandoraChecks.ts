@@ -32,6 +32,10 @@ export namespace PandoraChecks {
         export function isSkip(r: PandoraRest): r is PandoraRest.Skip {
             return isPeek(r); // peek = source
         }
+        export function isConcerts(r: PandoraRest): r is PandoraRest.Concerts {
+            var c = r as PandoraRest.Concerts;
+            return Array.isArray(c.artistEvents);
+        }
     }
     export function isPlaylist(i: Annotations.Playlist | Annotations.PlaylistCurator): i is Annotations.Playlist {
         var p = i as Annotations.Playlist;
@@ -40,5 +44,9 @@ export namespace PandoraChecks {
     export function isArtist(i: Annotations.Album | Annotations.Artist | Annotations.Track): i is Annotations.Artist {
         var p = i as Annotations.Artist;
         return p.type === 'AR';
+    }
+    export function isTrack(i: Annotations.Album | Annotations.Artist | Annotations.Track): i is Annotations.Track {
+        var p = i as Annotations.Track;
+        return p.type === 'TR';
     }
 }

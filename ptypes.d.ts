@@ -79,6 +79,8 @@ declare namespace PandoraTypes {
     export type Url = string;
     export type AuthToken = string;
     export type Semver = string;
+    export type Percentage = number;
+    export type Explicit = 'NONE' | 'EXPLICIT' | 'CLEAN';
 }
 
 declare interface Auth {
@@ -294,6 +296,28 @@ declare namespace OtherPandoraInterfaces {
         hasStatutory?: boolean;
         _typename?: 'Rights';
     }
+    export interface Concert {
+        id: string;
+        date: PandoraTypes.StringDate;
+        latitude: number;
+        longitude: number;
+        url: PandoraTypes.Url;
+        ticketSource: PandoraTypes.TicketSource;
+        onSaleDate: PandoraTypes.StringDate;
+        venueName: string;
+        city: string;
+        /**
+         * 2-letter state code, such as CA
+         * Pandora is not available outside of the US
+         */
+        state: string;
+        publishedDate: PandoraTypes.StringDate;
+        isFeatured: boolean;
+        artistUid: string;
+        artistPandoraId: PandoraTypes.Id;
+        otherArtistUids: Array<string>;
+        otherArtistPandoraIds: Array<PandoraTypes.Id>;
+    }
 }
 
 declare namespace PandoraComplexItems {
@@ -483,6 +507,9 @@ declare namespace PandoraRest {
         source: undefined;
     }
     export interface Skip extends Peek {}; // same response as peek
+    export interface Concerts {
+        artistEvents: Array<OtherPandoraInterfaces.Concert>
+    }
     export interface GraphQL {
         data: {
             entities?: Array<PandoraGraphQLEntity>;
@@ -496,7 +523,15 @@ declare namespace PandoraRest {
         }
     }
 }
-declare type PandoraRest = PandoraRest.Playlists | PandoraRest.Items | PandoraRest.GraphQL | PandoraRest.Stations | PandoraRest.Info | PandoraRest.Source | PandoraRest.Peek | PandoraRest.Skip;
+declare type PandoraRest = PandoraRest.Playlists 
+                         | PandoraRest.Items 
+                         | PandoraRest.GraphQL 
+                         | PandoraRest.Stations 
+                         | PandoraRest.Info 
+                         | PandoraRest.Source 
+                         | PandoraRest.Peek 
+                         | PandoraRest.Skip
+                         | PandoraRest.Concerts;
 
 // End of Pandora API responses
 

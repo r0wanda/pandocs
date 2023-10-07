@@ -24,6 +24,10 @@ class Api extends Login {
     src?: PandoraRest.Source | PandoraRest.Peek;
     time: number;
     ogSrc?: PandoraRest.OgSource;
+    icons = {
+        explicit: '🅴',
+        clean: '🅲'
+    }
     constructor() {
         super();
         this.csrf = '';
@@ -34,14 +38,29 @@ class Api extends Login {
         this.metad = null;
         this.time = 0;
 
+        this.mplay.volume(this.getVolume());
         this.mplay.on('time', (sec: number) => {
             this.time = sec;
         });
     }
+    /**
+     * TODO: implement
+     * @returns The user-set volume
+     */
+    getVolume(): PandoraTypes.Percentage { // TODO: Save volume
+        return 10;
+    }
+    /**
+     * Generic API error message
+     * @returns API error message
+     */
     apiError() {
         return new Error('API response was invalid')
     }
-    async init() {
+    /**
+     * Initialize class
+     */
+    async init(): Promise<void> {
         await super.init();
         await this.initCsrf();
         await this.cookieJar.setCookie(`csrftoken=${this.csrf}`, 'https://www.pandora.com');
@@ -49,6 +68,9 @@ class Api extends Login {
         console.error(await this.collection());
         //console.error(await this.current());
     }
+    /**
+     * Get csrftoken cookie from the Pandora website through a head request, and save as variable
+     */
     async initCsrf() {
         const res: PlainResponse = await got('https://www.pandora.com', {
             method: 'HEAD'
@@ -67,7 +89,13 @@ class Api extends Login {
         if (!this.csrf) throw new Error('No CSRF token could be obtained');
     }
 
-    async decode(rawData: Buffer, rawKey: PandoraTypes.XORKey) {
+    /**
+     * Decrypt Pandora audio through an XOR cipher
+     * @param rawData Buffer of encoded audio data
+     * @param rawKey Encoded 64-byte encryption key
+     * @returns Uint8Array of decrypted audio data
+     */
+    async decode(rawData: Buffer, rawKey: PandoraTypes.XORKey): Promise<Uint8Array> {
         // Parse key
         rawKey = atob(rawKey); // atob must be used, not Buffer.from
         const key = new Uint8Array(new ArrayBuffer(rawKey.length));
@@ -88,13 +116,77 @@ class Api extends Login {
         return res;
     }
 
+    /**
+     * Play audio through MPlayer
+     * @param buf Uint8Array or Buffer of audio data
+     */
     async playAudio(buf: Uint8Array | Buffer) {
         this.metad = (await musicMD(buf)).format;
         const fname = tmp.fileSync().name;
         wf(fname, buf);
         this.mplay.openFile(fname);
     }
+    /**
+     * Pulls track explicitness from cache
+     * @returns Pandora representation of explicitness (documented in ptypes.d.ts as PandoraTypes.Explicit)
+     */
+    getExplicitness(): PandoraTypes.Explicit {
+        var an;
+        try {
+            an = this.getTrackAnnotation();
+        } catch {
+            return 'NONE';
+        }
+        return an.explicitness;
+    }
+    /**
+     * Represent explicitness as an icon (pulls from cache)
+     * @returns An unicode icon representing the level of explicitness
+     */
+    getExplicitIcon(): string {
+        const ex = this.getExplicitness();
+        switch (ex) {
+            case 'NONE':
+                return '';
+            case 'EXPLICIT':
+                return this.icons.explicit;
+            case 'CLEAN':
+                return this.icons.clean;
+            default:
+                return '';
+        }
+    }
+    /**
+     * getExplicitIcon, but with color using blessed.js tags
+     * @returns An unicode icon representing the level of explicitness with blessed tags for color
+     */
+    blessedExplicitIcon() {
+        const ex = this.getExplicitIcon();
+        switch (ex) {
+            case this.icons.explicit:
+                return `{red-fg}${ex}{/red-fg}`;
+            case this.icons.clean:
+                return `{gray-fg}${ex}{/gray-fg}`;
+            default:
+                return ex;
+        }
+    }
+    /**
+     * Get the song name (with blessed.js tags by default)
+     * @param blessed Whether or not to use blessed.js tags for color
+     * @returns A string of the song name + explicitness (or "Buffering")
+     */
+    getSong(blessed = true) {
+        return this.src ? this.src.item.songName + (blessed ? this.blessedExplicitIcon() : this.getExplicitIcon()) : 'Buffering';
+    }
 
+    /**
+     * Make an generic Pandora api call
+     * @param path The url path (https://www.pandora.com will be prepended by default)
+     * @param json POST data to send (in json format)
+     * @param headers Additional headers to send
+     * @returns Pandora api response
+     */
     async rest(path: string, json = {}, headers = {}): Promise<PandoraRest> {
         var url = new URL('https://www.pandora.com/');
         url.pathname = path;
@@ -114,6 +206,11 @@ class Api extends Login {
         }).json();
         return res;
     }
+    /**
+     * Fetch (and decode if needed) an audio file from Pandora, and play it
+     * @param url Audio url to download
+     * @param key Encryption key if needed
+     */
     async audio(url: string, key?: string) {
         var res: Buffer = await got(url, {
             method: 'GET',
@@ -122,11 +219,14 @@ class Api extends Login {
                 'User-Agent': this.ua
             }
         }).buffer();
-        var uint;
-        if (key) uint = await this.decode(res, key);
-        else uint = res;
-        await this.playAudio(uint);
+        const aud = key ? await this.decode(res, key) : res;
+        await this.playAudio(aud);
     }
+    /**
+     * Make an GraphQL api call
+     * @param json POST data
+     * @returns The response
+     */
     async graphql(json: object): Promise<PandoraRest.GraphQL> {
         const res = await this.rest('/api/v1/graphql/graphql', json);
         if (!PandoraChecks.Rest.isGraphQL(res)) throw new Error('API response was not GraphQL');
@@ -189,6 +289,11 @@ class Api extends Login {
         if (!res.data.recentlyPlayedSources) throw this.apiError();
         return res.data.recentlyPlayedSources.items;
     }
+    /**
+     * Convert an art object from the Pandora api into a map
+     * @param art Direct api response
+     * @returns The decoded art map
+     */
     parseArt(art: Array<OtherPandoraInterfaces.Art>): Parsed.Art {
         var res: Map<string, string> = new Map();
         for (var a of art) res.set(a.size.toString(), a.url);
@@ -209,6 +314,9 @@ class Api extends Login {
         arr = arr.map(i => `https://content-images.p-cdn.com/images/${i.split('@1')[0]}_500W_500H.jpg`);
         return arr;
     }
+    /**
+     * Get collection (unfinished)
+     */
     async collection() {
         const stations = await this.getStations();
         const curated = await this.curateStations(stations);
@@ -262,13 +370,10 @@ class Api extends Login {
         console.error('stationlist')
         //console.error(stationList);
     }
-    async current() {
-        return await this.rest('/api/v1/playback/current', {
-            deviceProperties: this.deviceProperties(),
-            deviceUuid: this.uuid,
-            forceActive: true
-        });
-    }
+    /**
+     * Fetch and cache a Pandora source (anything that can be played)
+     * @returns The source object
+     */
     async source() {
         const res = await this.rest('/api/v1/playback/source', {
             deviceProperties: this.deviceProperties(),
@@ -288,6 +393,10 @@ class Api extends Login {
         await this.audio(res.item.audioUrl, res.item.key);
         return res;
     }
+    /**
+     * Peek at the next song (caches data)
+     * @returns Response
+     */
     async peek() {
         const res = await this.rest('/api/v1/playback/peek', {
             deviceProperties: this.deviceProperties(),
@@ -306,8 +415,13 @@ class Api extends Login {
         await this.audio(res.item.audioUrl, res.item.key);
         return res;
     }
+    /**
+     * Skip the current song (caches data)
+     * @returns Response
+     */
     async skip() {
-        const res = await this.rest('/api/v1/playback/peek', {
+        const res = await this.rest('/api/v1/action/skip', {
+            checkOnly: false,
             deviceProperties: this.deviceProperties(),
             clientFeatures: [],
             deviceUuid: this.uuid,
@@ -324,6 +438,9 @@ class Api extends Login {
         await this.audio(res.item.audioUrl, res.item.key);
         return res;
     }
+    /**
+     * Self-explanatory
+     */
     async thumbUp() {
         if (!this.src || !this.ogSrc) return;
         if (this.ogSrc.type !== 'Station') return;
@@ -337,6 +454,9 @@ class Api extends Login {
             trackToken: this.src.item.trackToken
         });
     }
+    /**
+     * Self-explanatory
+     */
     async removeThumb() {
         if (!this.src || !this.ogSrc) return;
         if (this.ogSrc.type !== 'Station') return;
@@ -361,6 +481,42 @@ class Api extends Login {
         const res = await this.rest('/api/v1/mip/getArtistPageConcerts', {
             pandoraId: id
         });
+        if (!PandoraChecks.Rest.isConcerts(res)) throw this.apiError();
+        return res;
+    }
+    /**
+     * Pull track annotation from cache
+     * If cache or track is undefined, an error will be thrown (do not retry)
+     * @returns Track annotation object (documented in ptypes.d.ts)
+     */
+    getTrackAnnotation(): Annotations.Track {
+        if (!this.src) throw new Error('No source');
+        var res;
+        for (var an of Object.values(this.src.annotations)) {
+            if (!PandoraChecks.isTrack(an)) continue;
+            res = an;
+            break;
+        }
+        if (!res) throw new Error('No track');
+        return res;
+    }
+    /**
+     * Pull dominantColor from cache
+     * If cache, track or color is undefined, white (#ffffff) will be returned.
+     * @returns Color in hex format, including the "#"
+     */
+    getColor(): string {
+        const white = '#ffffff'
+        if (!this.src) return white;
+        var col: string | null = '';
+        var an;
+        try {
+            an = this.getTrackAnnotation();
+        } catch {
+            return white;
+        }
+        col = an.icon.dominantColor;
+        return !col ? white : col.startsWith('#') ? col : '#' + col;
     }
     deviceProperties() {
         const d = new Date();
@@ -390,14 +546,41 @@ class Api extends Login {
             vendor_id: 100
         }
     }
+    /**
+     * Self-explanatory
+     */
     async isPremium() {
         return (await this.infoV2()).activeProduct.productTier.toLowerCase().includes('premium');
     }
+    /**
+     * Check plan compatibility
+     */
     async checkCompat() {
         if (!await this.isPremium()) {
             console.error('Pandora Premium is the only product currently supported (free subscribers coming eventually) (maybe)');
             process.exit(0);
         }
+    }
+    /**
+     * Retry an async function 10 times, with delays in between
+     * @param func The function to retry (bind beforehand if needed)
+     * @returns The function's return value
+     */
+    retry(func: () => any) {
+        return new Promise<Awaited<ReturnType<typeof func>>>(r => {
+            var tries = 0;
+            const int = setInterval(async () => {
+                try {
+                    var res = await func();
+                    clearInterval(int);
+                    r(res);
+                } catch (err) {
+                    console.error(err);
+                    tries++;
+                }
+                if (tries >= 10) throw new Error('Could not connect to Pandora!');
+            }, 3000);
+        })
     }
 }
 

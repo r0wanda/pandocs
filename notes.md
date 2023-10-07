@@ -1,0 +1,1 @@
+- when working on artist/now playing pages, html tags should be stripped and html entities parsed in the artist bio (possibly for lyric snippets/pages as well)
